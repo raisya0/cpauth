@@ -1,0 +1,77 @@
+#!/bin/bash
+# scan_whm_range.sh - Scan range IP untuk port 2087, output ke file whm (format IP:PORT)
+
+OUTPUT="whm"
+TIMEOUT=10
+THREADS=100
+
+# Hapus file output lama
+> "$OUTPUT"
+
+# Fungsi scan single IP
+scan_ip() {
+    local ip="$1"
+    if timeout $TIMEOUT bash -c "echo >/dev/tcp/$ip/2087" 2>/dev/null; then
+        echo "$ip:2087" | tee -a "$OUTPUT"
+    fi
+}
+export -f scan_ip
+export TIMEOUT OUTPUT
+
+# Scan dari file list network/ip
+if [ -n "$1" ] && [ -f "$1" ]; then
+    echo "[*] Scanning networks from $1"
+    
+    while read -r line; do
+        [ -z "$line" ] && continue
+        line=$(echo "$line" | tr -d '\r')
+        
+        # Cek apakah CIDR atau network prefix
+        if [[ "$line" == *"/"* ]]; then
+            # CIDR (contoh: 103.219.251.0/24)
+            prefix=$(echo "$line" | cut -d. -f1-3)
+            echo "[*] Scanning $prefix.0/24"
+            for i in $(seq 1 254); do
+                echo "$prefix.$i"
+            done | xargs -P $THREADS -I {} bash -c 'scan_ip "$@"' _ {}
+        elif [[ $(echo "$line" | grep -o '\.' | wc -l) -eq 3 ]]; then
+            # Single IP
+            scan_ip "$line"
+        else
+            # Network prefix (contoh: 103.219.251)
+            echo "[*] Scanning $line.0/24"
+            for i in $(seq 1 254); do
+                echo "$line.$i"
+            done | xargs -P $THREADS -I {} bash -c 'scan_ip "$@"' _ {}
+        fi
+    done < "$1"
+
+# Scan single network prefix langsung dari argumen
+elif [ -n "$1" ]; then
+    prefix="$1"
+    echo "[*] Scanning $prefix.0/24"
+    for i in $(seq 1 254); do
+        echo "$prefix.$i"
+    done | xargs -P $THREADS -I {} bash -c 'scan_ip "$@"' _ {}
+
+else
+    echo "Usage: $0 <networks_file>"
+    echo "       $0 <network_prefix>"
+    echo ""
+    echo "Examples:"
+    echo "  $0 networks.txt"
+    echo "  $0 103.219.251"
+    echo ""
+    echo "File networks.txt format:"
+    echo "  103.219.251"
+    echo "  103.216.188"
+    echo "  203.128.88"
+    exit 1
+fi
+
+echo ""
+echo "[+] Scan completed!"
+echo "[+] Results saved to: $OUTPUT"
+echo ""
+echo "=== OPEN WHM PORTS ==="
+cat "$OUTPUT"
